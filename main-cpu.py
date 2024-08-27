@@ -8,12 +8,9 @@ import time
 app = FastAPI()
 
 # Check if GPU is available
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cpu')
 
 print(f"Using device: {device}")
-if device.type == 'cuda':
-    print(f"Device name: {torch.cuda.get_device_name(0)}")
-    print(f"CUDA version: {torch.version.cuda}")
     
     
 # Load the T5 tokenizer and model from the Hugging Face model hub
