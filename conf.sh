@@ -1,13 +1,15 @@
 #!/bin/bash
 clear
 cat << EOF
-MINIME-T5
+MINIME-T5 & TXT2VEC
 
 This is a tiny LLM (400MB) that will improve the roleplay of CHIM.
-
+It also installs TXT2VEC for vectoring.
 Remember to enable MINIME_T5 in the configuration wizard under the default profile!
 
-You can either run it off your GPU or CPU. CPU is a little slower. 
+Options:
+* CPU = Recommended for AMD GPUs.
+* GPU = Recommended for Nvidia GPUs.
 
 If you are not sure use CPU.
 
