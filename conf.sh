@@ -3,11 +3,11 @@ clear
 cat << EOF
 MINIME-T5
 
-This will install MiniMe-T5. This is a tiny LLM (400MB) that will help other "dumb" LLM's perform actions. 
+This is a tiny LLM (400MB) that will improve the roleplay of CHIM.
 
 Remember to enable MINIME_T5 in the configuration wizard under the default profile!
 
-Can either run it off your GPU or CPU. CPU is slower but saves precious GPU space. 
+You can either run it off your GPU or CPU. CPU is a little slower. 
 
 If you are not sure use CPU.
 
