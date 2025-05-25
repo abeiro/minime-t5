@@ -302,6 +302,7 @@ async def create_embedding(text_input: TextInput):
     Returns:
         Dictionary containing the embedding vector and timing information
     """
+    global embedding_model  # Declare embedding_model as global
     try:
         # Log request
         logger.info(f"Processing text for embedding: {text_input.text[:50]}...")
