@@ -22,12 +22,14 @@ app = FastAPI(
 )
 
 # Check if GPU is available
+
 device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
 logger.info(f"Using device: {device}")
 if device.type == 'cuda':
     logger.info(f"Device name: {torch.cuda.get_device_name(0)}")
     logger.info(f"CUDA version: {torch.version.cuda}")
    
+
 # Load the T5 tokenizer and model from the Hugging Face model hub
 logger.info("Loading T5 model...")
 start_time = time.time()
@@ -336,3 +338,4 @@ async def create_embedding(text_input: TextInput):
     except Exception as e:
         logger.error(f"Error generating embedding: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
