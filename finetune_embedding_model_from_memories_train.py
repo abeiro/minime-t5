@@ -28,7 +28,7 @@ train_loss = losses.CosineSimilarityLoss(model)
 # --- Fine-tune the model ---
 model.fit(
     train_objectives=[(train_dataloader, train_loss)],
-    epochs=3,              # Adjust epochs based on dataset size
+    epochs=1,              # Adjust epochs based on dataset size
     warmup_steps=100       # Optional warmup
 )
 

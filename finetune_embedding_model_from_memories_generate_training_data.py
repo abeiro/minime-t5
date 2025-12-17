@@ -6,20 +6,22 @@ from math import ceil
 # --- Function to convert hashtags to readable text ---
 def hashtags_to_text(text: str) -> str:
     """
-    Convert hashtags in a text to readable words, preserving the rest of the text.
+    Convert hashtags in a text to readable words, preserving punctuation (e.g., commas).
     Converts the result to lowercase.
     Example:
-        #TundraHideout → tundra hideout
-        #DragonSoulAbsorption → dragon soul absorption
-        #Titan'sFist → titan's fist
+        "#TundraHideout, #DragonSoulAbsorption" 
+        → "tundra hideout, dragon soul absorption"
     """
     def replace_tag(match):
         tag = match.group(1)
-        # Split CamelCase and words with apostrophes, numbers, or lowercase sequences
+        # Split CamelCase, apostrophes, and numbers correctly
         words = re.findall(r"[A-Z][a-z']*|[a-z]+|\d+", tag)
         return " ".join(words)
-    
-    return re.sub(r"#(\w+)", replace_tag, text).lower()
+
+    # Match hashtags followed by optional punctuation (keep the punctuation in group 2)
+    return re.sub(r"#([A-Za-z0-9']+)([.,;:]*)", 
+                  lambda m: replace_tag(m) + m.group(2), 
+                  text).lower()
 
 def remove_hashtags(text: str) -> str:
     """
@@ -58,7 +60,7 @@ conn = psycopg2.connect(
     port=DB_PORT
 )
 cur = conn.cursor()
-cur.execute('SELECT summary, tags FROM "public"."memory_summary";')
+cur.execute('SELECT summary, tags FROM "public"."memory_summary" where summary is not null and tags is not null and tags<>\'\'')
 rows = cur.fetchall()
 cur.close()
 conn.close()

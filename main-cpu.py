@@ -586,3 +586,80 @@ def word_classifier(text: str = Query(..., description="Word to classify as noun
     except Exception as e:
         logger.error(f"Error in word classifier: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/ambient")
+def extract_info(text: str = Query(..., description="Movie dialogue to classify genre")):
+    start_time = time.time()
+    
+    # Define your valid genres
+    VALID_GENRES = ["horror", "action", "thriller", "mystery", "romance", "comedy", "drama"]
+
+    # --- IMPROVED PROMPT WITH FEW-SHOT EXAMPLES ---
+    prompt = (
+        "Classify the following movie dialogues into one of these genres: "
+        f"{', '.join(VALID_GENRES)}.\n\n"
+        
+        "Example 1:\n"
+        "Dialogue: 'The monster is right behind you! Run for your life!'\n"
+        "Genre: horror\n\n"
+        
+        "Example 2:\n"
+        "Dialogue: 'We need more power to reroute the main grid! The whole system is failing!'\n"
+        "Genre: action\n\n"
+        
+        "Example 3:\n"
+        "Dialogue: 'I can't believe he said that! It was so awkward and hilarious.'\n"
+        "Genre: comedy\n\n"
+        
+        "Example 4:\n"
+        "Dialogue: 'Every clue points to a conspiracy, but the pieces just don't fit yet. Who could have done this?'\n"
+        "Genre: mystery\n\n"
+
+        # Your actual query
+        f"Dialogue: '{text}'\n"
+        "Genre:"
+    )
+
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+
+    outputs = model.generate(
+        input_ids,
+        max_new_tokens=10,  # We only need one word
+        num_beams=5,        # Keep beams at 5 for better quality classification
+        do_sample=False,    # Deterministic output is generally better for classification
+        temperature=0.0     # Ensures the most likely token is chosen
+    )
+
+    raw_output = tokenizer.decode(outputs[0], skip_special_tokens=True).strip().lower()
+
+    # Robust matching logic
+    genre = "unknown"
+    
+    # First, try an exact match
+    if raw_output in VALID_GENRES:
+        genre = raw_output
+    else:
+        # Fallback: Check if any valid genre is contained in the output
+        # This handles cases where the model might output "a comedy" or "genre: thriller"
+        for g in VALID_GENRES:
+            if g in raw_output:
+                genre = g
+                break
+        # If still not found, try to be more lenient with partial matches
+        # For example, if "romantic" is output, map to "romance"
+        if genre == "unknown":
+            if "romantic" in raw_output:
+                genre = "romance"
+            elif "action-packed" in raw_output:
+                genre = "action"
+            # Add other common variations if you observe them
+            
+    logger.info(f"Input: {text[:50]}... | Raw Model Output: '{raw_output}' | Predicted Genre: '{genre}'")
+    elapsed_time = time.time() - start_time
+
+    return {
+        "input_text": text,
+        "generated_tags": genre,
+        "raw_model_output": raw_output, # Good for debugging
+        "elapsed_time": f"{elapsed_time:.2f} seconds"
+    }
