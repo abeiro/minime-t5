@@ -19,7 +19,7 @@ if [ ! -d /home/dwemer/python-minime ]; then
 	exit "MiniMe-t5 not installed"
 fi
 
-mapfile -t files < <(find /home/dwemer/minime-t5/ -name "start-*.sh")
+mapfile -t files < <(find /home/dwemer/minime-t5/ -name "start-*.sh" | sort -r)
 # Check if any files were found
 
 if [ ${#files[@]} -eq 0 ]; then
