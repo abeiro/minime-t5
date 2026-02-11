@@ -1,29 +1,52 @@
 import torch
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 from transformers import T5Tokenizer, T5ForConditionalGeneration
+from sentence_transformers import SentenceTransformer
 import time
+import logging
+import numpy as np
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Initialize the FastAPI app
-app = FastAPI()
+app = FastAPI(
+    title="Text Processing Service",
+    description="A service for text processing including command extraction, topic analysis, and text embeddings",
+    version="1.0.0"
+)
 
 # Check if GPU is available
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-print(f"Using device: {device}")
+logger.info(f"Using device: {device}")
 if device.type == 'cuda':
-    print(f"Device name: {torch.cuda.get_device_name(0)}")
-    print(f"CUDA version: {torch.version.cuda}")
+    logger.info(f"Device name: {torch.cuda.get_device_name(0)}")
+    logger.info(f"CUDA version: {torch.version.cuda}")
    
-    
+
 # Load the T5 tokenizer and model from the Hugging Face model hub
+logger.info("Loading T5 model...")
+start_time = time.time()
 tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-small", legacy=False, clean_up_tokenization_spaces=True)
 model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-small").to(device)
+t5_load_time = time.time() - start_time
+logger.info(f"T5 model loaded in {t5_load_time:.2f} seconds")
+
+# Load the sentence transformer model
+embedding_model = None  # Global variable to hold the model instance
+
 
 class ExtractRequest(BaseModel):
     text: str
 
+class TextInput(BaseModel):
+    text: str
 
 @app.get("/command")
 def extract_info(text: str = Query(..., description="Text to process for keyword extraction")):
@@ -151,6 +174,7 @@ def extract_info(text: str = Query(..., description="Text to process for keyword
     outputs = model.generate(input_ids, max_length=50, num_beams=5, early_stopping=True)
     trigger_memory = tokenizer.decode(outputs[0], skip_special_tokens=True)
     print("Memory req: " + trigger_memory.lower())
+
     answered=False;
     if trigger_memory.lower() == "yes":
         answered=True
@@ -158,6 +182,7 @@ def extract_info(text: str = Query(..., description="Text to process for keyword
     if answered==False :
         end_time = time.time()
         elapsed_time = end_time - start_time
+        print(f"{elapsed_time:.2f} seconds")
         return {
             "input_text": text,
             "prompt": input_text,
@@ -167,11 +192,16 @@ def extract_info(text: str = Query(..., description="Text to process for keyword
 
     end_time = time.time()
     elapsed_time = end_time - start_time
-    
+    print(f"Memory req detection: {elapsed_time:.2f} seconds")
+ 
     input_text = f"\"{text}\"\nExtract sailent words from above paragraph"
     input_ids = tokenizer.encode(input_text, return_tensors='pt', truncation=True).to(device)
     outputs = model.generate(input_ids, max_length=50, num_beams=5, early_stopping=True)
     trigger_memory = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Word extraction: {elapsed_time:.2f} seconds {trigger_memory}")
     
     return {
         "input_text": text,
@@ -179,6 +209,45 @@ def extract_info(text: str = Query(..., description="Text to process for keyword
         "is_memory_recall": "Yes",
         "elapsed_time": f"{elapsed_time:.2f} seconds",
         "trigger_memory":trigger_memory
+    }
+
+
+
+@app.get("/detectMemory")
+def detectMemory(text: str = Query(..., description="Text to process for keyword extraction")):
+    start_time = time.time()
+    print(text)
+    
+    # Step 0: Trigger memory
+    input_text = f"\"{text}\"\nBased on the paragraph above can we conclude that i need to remember something?\nAnswer with either 'yes' or 'no'"
+    input_ids = tokenizer.encode(input_text, return_tensors='pt', truncation=True).to(device)
+    outputs = model.generate(input_ids, max_length=50, num_beams=5, early_stopping=True)
+    trigger_memory = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    print("Memory req: " + trigger_memory.lower())
+
+    answered=False;
+    if trigger_memory.lower() == "yes":
+        answered=True
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"{elapsed_time:.2f} seconds")
+        
+    if answered==False :
+        return {
+            "input_text": text,
+            "prompt": input_text,
+            "is_memory_recall": "No",
+            "elapsed_time": f"{elapsed_time:.2f} seconds"
+        }
+
+    
+    return {
+        "input_text": text,
+        "generated_tags": "",
+        "is_memory_recall": "Yes",
+        "elapsed_time": f"{elapsed_time:.2f} seconds",
+        "trigger_memory":""
     }
 
 @app.get("/topic")
@@ -267,3 +336,156 @@ def extract_info(text: str = Query(..., description="Text to process for keyword
         "generated_tags": generated_tags,
         "elapsed_time": f"{elapsed_time:.2f} seconds"
     }
+
+@app.get("/translate")
+def extract_info(text: str = Query(..., description="Text to process for keyword extraction")):
+    start_time = time.time()
+    
+    # Step 1: Extract Keywords
+    input_text = f"Translate to english:\n{text} "
+
+    print(input_text)
+
+    input_ids = tokenizer.encode(input_text, return_tensors='pt', truncation=True).to(device)
+    outputs = model.generate(input_ids, max_length=25, num_beams=5, early_stopping=True)
+    generated_tags = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(generated_tags)
+    return {
+        "input_text": text,
+        "generated_tags": generated_tags,
+        "elapsed_time": f"{elapsed_time:.2f} seconds"
+    }
+
+@app.post("/embed")
+async def create_embedding(text_input: TextInput):
+    """
+    Generate embedding for the input text.
+    
+    Args:
+        text_input: TextInput object containing the text to embed
+        
+    Returns:
+        Dictionary containing the embedding vector and timing information
+    """
+    global embedding_model  # Declare embedding_model as global
+    try:
+        # Log request
+        logger.info(f"Processing text for embedding: {text_input.text[:50]}...")
+        
+
+        if embedding_model is None:
+            logger.info("Loading sentence transformer model for the first time...")
+            start_time_model = time.time()
+            embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
+            model_load_time = time.time() - start_time_model
+            logger.info(f"Sentence transformer model loaded in {model_load_time:.2f} seconds")
+
+
+        # Generate embedding with timing
+        logger.info(f"Processing text for embedding: {text_input.text}...")
+        start_time = time.time()
+        embedding = embedding_model.encode(text_input.text)
+        generation_time = time.time() - start_time
+        
+        # Convert to list for JSON serialization
+        embedding_list = embedding.tolist()
+        
+        # Log completion
+        logger.info(f"Embedding generated in {generation_time:.4f} seconds")
+        
+        return {
+            "embedding": embedding_list,
+            "dimensions": len(embedding_list),
+            "timing": {
+                "generation_time_seconds": generation_time,
+                "text_length": len(text_input.text)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error generating embedding: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.post("/tembed")
+async def create_embedding(text_input: TextInput):
+    """
+    Generate embedding for the input text.
+    
+    Args:
+        text_input: TextInput object containing the text to embed
+                   (only the part before '|' will be used)
+        
+    Returns:
+        Dictionary containing the embedding vector and timing information
+    """
+    global embedding_model
+    try:
+        # Split input on "|" and keep only first part
+        text_to_process = text_input.text.split("/", 1)[0].strip()
+
+        # Log request
+        logger.info(f"Processing text for embedding: {text_to_process[:250]}...")
+
+        start_time = time.time()
+
+        # Load embedding model if not already loaded
+        if embedding_model is None:
+            logger.info("Loading sentence transformer model for the first time...")
+            start_time_model = time.time()
+            embedding_model = SentenceTransformer(
+                'sentence-transformers/all-MiniLM-L6-v2',
+                device=device
+            )
+            model_load_time = time.time() - start_time_model
+            logger.info(f"Sentence transformer model loaded in {model_load_time:.2f} seconds")
+
+        # Translate text first
+        text_preinput = f"Translate to English literally, word for word:\n\"{text_to_process}\""
+        logger.info(f"Text (first 150 chars): {text_preinput[:150]}...")
+
+        input_ids = tokenizer.encode(
+            text_preinput,
+            return_tensors='pt',
+            truncation=True
+        ).to(device)
+
+        outputs = model.generate(
+            input_ids,
+            max_length=min(len(text_to_process) + 50, 50),  # safeguard length
+            num_beams=5,
+            early_stopping=True
+        )
+
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        logger.info(f"Translated text (first 150 chars): {generated_text}...")
+
+        # Generate embedding
+        embedding_start = time.time()
+        embedding = embedding_model.encode(generated_text)
+        generation_time = time.time() - embedding_start
+
+        # Convert to list for JSON serialization
+        embedding_list = embedding.tolist()
+
+        # Log completion
+        total_time = time.time() - start_time
+        logger.info(f"Embedding generated in {generation_time:.4f} seconds (total {total_time:.4f}s)")
+
+        return {
+            "embedding": embedding_list,
+            "dimensions": len(embedding_list),
+            "timing": {
+                "generation_time_seconds": generation_time,
+                "total_time_seconds": total_time,
+                "text_length": len(text_to_process)
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error generating embedding: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
