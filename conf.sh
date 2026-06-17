@@ -9,7 +9,7 @@ Remember to enable MINIME_T5 in the configuration wizard under the default profi
 
 Options:
 * CPU = Recommended for AMD GPUs.
-* GPU = Recommended for Nvidia GPUs.
+* GPU / CUDA = Recommended for Nvidia GPUs.
 
 If you are not sure use CPU.
 
@@ -29,8 +29,23 @@ fi
 
 # Display the files in a numbered list
 echo -e "Select a an option from the list:\n\n"
+
+label_for_file() {
+    case "$(basename "$1")" in
+        start-gpu.sh)
+            echo "Enable service (GPU / CUDA)"
+            ;;
+        start-cpu.sh)
+            echo "Enable service (CPU)"
+            ;;
+        *)
+            echo "$(basename "$1")"
+            ;;
+    esac
+}
+
 for i in "${!files[@]}"; do
-    echo "$((i+1)). ${files[$i]}"
+    echo "$((i+1)). $(label_for_file "${files[$i]}")"
 done
 
 echo "0. Disable Service";
@@ -55,9 +70,9 @@ fi
 # Get the selected file
 selected_file="${files[$((selection-1))]}"
 
-echo "You selected: $selected_file"
+echo "You selected: $(label_for_file "$selected_file")"
 
-ln -sf $selected_file /home/dwemer/minime-t5/start.sh
+ln -sf "$selected_file" /home/dwemer/minime-t5/start.sh
 
 
 
