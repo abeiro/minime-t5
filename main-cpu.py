@@ -1,8 +1,14 @@
 import torch
+import re
 from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 from sentence_transformers import SentenceTransformer
+from transformers import BertTokenizer, BertForSequenceClassification
+import torch.nn.functional as F
+import os
+
+
 import time
 import logging
 import numpy as np
@@ -40,6 +46,12 @@ logger.info(f"T5 model loaded in {t5_load_time:.2f} seconds")
 
 # Load the sentence transformer model
 embedding_model = None  # Global variable to hold the model instance
+
+# Global classifier model
+word_classifier_model = None
+word_classifier_tokenizer = None
+
+CUSTOM_MODEL_PATH = "~custom-MiniLM"  # path to your fine-tuned model
 
 
 class ExtractRequest(BaseModel):
@@ -359,41 +371,59 @@ def extract_info(text: str = Query(..., description="Text to process for keyword
         "elapsed_time": f"{elapsed_time:.2f} seconds"
     }
 
+
+
+def hashtags_to_text(text: str) -> str:
+    """
+    Convert hashtags in a text to readable words, preserving the rest of the text.
+    Converts the result to lowercase.
+    Example:
+        #TundraHideout → tundra hideout
+        #DragonSoulAbsorption → dragon soul absorption
+        #Titan'sFist → titan's fist
+    """
+    def replace_tag(match):
+        tag = match.group(1)
+        # Split CamelCase and words with apostrophes, numbers, or lowercase sequences
+        words = re.findall(r"[A-Z][a-z']*|[a-z]+|\d+", tag)
+        return " ".join(words)
+    
+    return re.sub(r"#(\w+)", replace_tag, text).lower()
+
+
 @app.post("/embed")
 async def create_embedding(text_input: TextInput):
     """
-    Generate embedding for the input text.
-    
-    Args:
-        text_input: TextInput object containing the text to embed
-        
-    Returns:
-        Dictionary containing the embedding vector and timing information
+    Generate embedding for the input text, converting hashtags to readable words.
     """
-    global embedding_model  # Declare embedding_model as global
+    global embedding_model
     try:
-        # Log request
-        logger.info(f"Processing text for embedding: {text_input.text[:50]}...")
-        
-
         if embedding_model is None:
             logger.info("Loading sentence transformer model for the first time...")
             start_time_model = time.time()
-            embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
+
+            # Check if custom fine-tuned model exists
+            if os.path.exists(CUSTOM_MODEL_PATH):
+                logger.info(f"Custom fine-tuned model found at '{CUSTOM_MODEL_PATH}', loading...")
+                embedding_model = SentenceTransformer(CUSTOM_MODEL_PATH, device=device)
+            else:
+                logger.info("Custom model not found, loading default 'all-MiniLM-L6-v2'...")
+                embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
+
             model_load_time = time.time() - start_time_model
             logger.info(f"Sentence transformer model loaded in {model_load_time:.2f} seconds")
 
+        # Transform hashtags into readable text
+        cleaned_text = hashtags_to_text(text_input.text)
 
         # Generate embedding with timing
-        logger.info(f"Processing text for embedding: {text_input.text}...")
+        logger.info(f"Processing text for embedding: {cleaned_text[:100]}...")  # preview first 100 chars
         start_time = time.time()
-        embedding = embedding_model.encode(text_input.text)
+        embedding = embedding_model.encode(cleaned_text)
         generation_time = time.time() - start_time
-        
-        # Convert to list for JSON serialization
+
         embedding_list = embedding.tolist()
-        
-        # Log completion
+
         logger.info(f"Embedding generated in {generation_time:.4f} seconds")
         
         return {
@@ -401,14 +431,14 @@ async def create_embedding(text_input: TextInput):
             "dimensions": len(embedding_list),
             "timing": {
                 "generation_time_seconds": generation_time,
-                "text_length": len(text_input.text)
-            }
+                "text_length": len(cleaned_text)
+            },
+            "processed_text": cleaned_text
         }
     except Exception as e:
         logger.error(f"Error generating embedding: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
+    
 
 @app.post("/tembed")
 async def create_embedding(text_input: TextInput):
@@ -489,3 +519,147 @@ async def create_embedding(text_input: TextInput):
     except Exception as e:
         logger.error(f"Error generating embedding: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+from transformers import AutoTokenizer, AutoModelForTokenClassification
+import torch.nn.functional as F
+
+# Global vars
+word_classifier_model = None
+word_classifier_tokenizer = None
+
+@app.get("/wordClasiffier")
+def word_classifier(text: str = Query(..., description="Word to classify as noun/verb/other")):
+    global word_classifier_model, word_classifier_tokenizer
+    start_time = time.time()
+
+    try:
+        # Load pretrained POS model on first request
+        if word_classifier_model is None or word_classifier_tokenizer is None:
+            logger.info("Loading POS tagging BERT model (first time)...")
+            word_classifier_tokenizer = AutoTokenizer.from_pretrained(
+                "vblagoje/bert-english-uncased-finetuned-pos"
+            )
+            word_classifier_model = AutoModelForTokenClassification.from_pretrained(
+                "vblagoje/bert-english-uncased-finetuned-pos"
+            ).to(device)
+            logger.info("POS model loaded successfully.")
+
+        # Tokenize word
+        inputs = word_classifier_tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            padding=True,
+            is_split_into_words=False
+        ).to(device)
+
+        # Forward pass
+        with torch.no_grad():
+            outputs = word_classifier_model(**inputs)
+            logits = outputs.logits
+            probs = F.softmax(logits, dim=-1)
+
+        # Decode predicted POS tag for the first token
+        pred_id = torch.argmax(probs[0][1]).item()  # skip [CLS] token at index 0
+        predicted_pos = word_classifier_model.config.id2label[pred_id]
+
+        # Map to noun/verb/other
+        if predicted_pos.startswith("NOUN") or predicted_pos.startswith("PROPN"):
+            final_label = "noun"
+        elif predicted_pos.startswith("VERB"):
+            final_label = "verb"
+        else:
+            final_label = "other"
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
+        return {
+            "input_text": text,
+            "classification": final_label,
+            "pos_tag": predicted_pos,
+            "confidence": probs[0][1][pred_id].item(),
+            "elapsed_time": f"{elapsed_time:.2f} seconds"
+        }
+
+    except Exception as e:
+        logger.error(f"Error in word classifier: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/ambient")
+def extract_info(text: str = Query(..., description="Movie dialogue to classify genre")):
+    start_time = time.time()
+    
+    # Define your valid genres
+    VALID_GENRES = ["horror", "action", "thriller", "mystery", "romance", "comedy", "drama"]
+
+    # --- IMPROVED PROMPT WITH FEW-SHOT EXAMPLES ---
+    prompt = (
+        "Classify the following movie dialogues into one of these genres: "
+        f"{', '.join(VALID_GENRES)}.\n\n"
+        
+        "Example 1:\n"
+        "Dialogue: 'The monster is right behind you! Run for your life!'\n"
+        "Genre: horror\n\n"
+        
+        "Example 2:\n"
+        "Dialogue: 'We need more power to reroute the main grid! The whole system is failing!'\n"
+        "Genre: action\n\n"
+        
+        "Example 3:\n"
+        "Dialogue: 'I can't believe he said that! It was so awkward and hilarious.'\n"
+        "Genre: comedy\n\n"
+        
+        "Example 4:\n"
+        "Dialogue: 'Every clue points to a conspiracy, but the pieces just don't fit yet. Who could have done this?'\n"
+        "Genre: mystery\n\n"
+
+        # Your actual query
+        f"Dialogue: '{text}'\n"
+        "Genre:"
+    )
+
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+
+    outputs = model.generate(
+        input_ids,
+        max_new_tokens=10,  # We only need one word
+        num_beams=5,        # Keep beams at 5 for better quality classification
+        do_sample=False,    # Deterministic output is generally better for classification
+        temperature=0.0     # Ensures the most likely token is chosen
+    )
+
+    raw_output = tokenizer.decode(outputs[0], skip_special_tokens=True).strip().lower()
+
+    # Robust matching logic
+    genre = "unknown"
+    
+    # First, try an exact match
+    if raw_output in VALID_GENRES:
+        genre = raw_output
+    else:
+        # Fallback: Check if any valid genre is contained in the output
+        # This handles cases where the model might output "a comedy" or "genre: thriller"
+        for g in VALID_GENRES:
+            if g in raw_output:
+                genre = g
+                break
+        # If still not found, try to be more lenient with partial matches
+        # For example, if "romantic" is output, map to "romance"
+        if genre == "unknown":
+            if "romantic" in raw_output:
+                genre = "romance"
+            elif "action-packed" in raw_output:
+                genre = "action"
+            # Add other common variations if you observe them
+            
+    logger.info(f"Input: {text[:50]}... | Raw Model Output: '{raw_output}' | Predicted Genre: '{genre}'")
+    elapsed_time = time.time() - start_time
+
+    return {
+        "input_text": text,
+        "generated_tags": genre,
+        "raw_model_output": raw_output, # Good for debugging
+        "elapsed_time": f"{elapsed_time:.2f} seconds"
+    }
