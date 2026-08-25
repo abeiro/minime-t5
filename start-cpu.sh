@@ -5,3 +5,5 @@ cd /home/dwemer/minime-t5/
 uvicorn main-cpu:app --port 8082 &>log.txt&
 
 
+# Preload inference models without delaying the rest of distro startup.
+/home/dwemer/minime-t5/warmup.sh >>log.txt 2>&1 &
